@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import logging
+
+import pymongo
 from peewee import Model, SqliteDatabase, InsertQuery, IntegerField,\
                    CharField, FloatField, BooleanField, DateTimeField
 from datetime import datetime
@@ -11,11 +13,14 @@ from base64 import b64encode
 from .utils import get_pokemon_name, get_args
 from .transform import transform_from_wgs_to_gcj
 from .customLog import printPokemon
+from .utils import get_pokemon_name
 
 args = get_args()
 db = SqliteDatabase(args.db)
 log = logging.getLogger(__name__)
-
+mongo = pymongo.MongoClient('172.31.30.39,172.31.30.40,172.31.30.41')
+col = mongo['pokemon']['spawn']
+exclude = ['Rattata', 'Pidgey', 'Weedle', 'Zubat', 'Spearow']
 
 class BaseModel(Model):
     class Meta:
@@ -162,6 +167,7 @@ def parse_map(map_dict, iteration_num, step, step_location):
     if pokemons:
         log.info("Upserting {} pokemon".format(len(pokemons)))
         bulk_upsert(Pokemon, pokemons)
+        mongo_upsert(pokemons)
 
     if pokestops:
         log.info("Upserting {} pokestops".format(len(pokestops)))
@@ -190,6 +196,31 @@ def bulk_upsert(cls, data):
         InsertQuery(cls, rows=data.values()[i:min(i+step, num_rows)]).upsert().execute()
         i+=step
 
+def mongo_upsert(data):
+    for k, v in data.iteritems():
+        record = {
+            '_id': v['encounter_id'],
+            'loc': {
+                'type': 'Point',
+                'coordinates': [
+                    v['longitude'], v['latitude']
+                ]
+            },
+            'disappear_time': (v['disappear_time'] - datetime(1970, 1, 1)).total_seconds(),
+            'pokemon_id': str(v['pokemon_id']),
+            'latitude': v['latitude'],
+            'longitude': v['longitude'],
+            'visited': False,
+            'pokemon_name': get_pokemon_name(v['pokemon_id'])
+        }
+        try:
+            if record['pokemon_name'] in exclude:
+                continue
+            col.insert_one(record)
+            log.info('update {} to Mongo'.format(record['pokemon_name']))
+        except:
+            pass
+    log.info('upsert {} to Mongo'.format(len(data)))
 
 
 def create_tables():
